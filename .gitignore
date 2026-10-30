@@ -1,0 +1,7 @@
+tmp/
+*.so
+*.o
+__pycache__/
+.claude/
+DESIGN.md
+PLAN.md

@@ -1,0 +1,213 @@
+diff --git a/include/plugins/qemu-plugin.h b/include/plugins/qemu-plugin.h
+index 4eb1d2cd..1a563713 100644
+--- a/include/plugins/qemu-plugin.h
++++ b/include/plugins/qemu-plugin.h
+@@ -825,6 +825,54 @@ const void *qemu_plugin_request_time_control(void);
+ QEMU_PLUGIN_API
+ void qemu_plugin_update_ns(const void *handle, int64_t time);
+ 
++/**
++ * typedef qemu_plugin_guest_region_cb_t - guest memory region callback
++ * @opaque: user data passed to qemu_plugin_walk_guest_regions()
++ * @start: first guest virtual address of the region
++ * @end: guest virtual address one past the end of the region
++ * @prot: QEMU_PLUGIN_PROT_* bits of the region as the guest mapped it
++ *
++ * Return non-zero to stop the walk.
++ */
++typedef int (*qemu_plugin_guest_region_cb_t)(void *opaque, uint64_t start,
++                                             uint64_t end, int prot);
++
++#define QEMU_PLUGIN_PROT_READ  1
++#define QEMU_PLUGIN_PROT_WRITE 2
++#define QEMU_PLUGIN_PROT_EXEC  4
++
++/**
++ * qemu_plugin_walk_guest_regions() - walk the guest's mapped memory regions
++ * @cb: callback invoked for each contiguous region with identical protection
++ * @opaque: user data passed to @cb
++ *
++ * User-mode only. The walk sees the same regions as the guest's
++ * /proc/self/maps. Returns the last non-zero callback result, 0 when the walk
++ * completed, or -1 when not supported (system mode).
++ */
++QEMU_PLUGIN_API
++int qemu_plugin_walk_guest_regions(qemu_plugin_guest_region_cb_t cb,
++                                   void *opaque);
++
++/**
++ * typedef qemu_plugin_guest_write_cb_t - guest memory written by the emulator
++ * @guest_addr: first guest virtual address written
++ * @len: number of bytes written
++ */
++typedef void (*qemu_plugin_guest_write_cb_t)(uint64_t guest_addr, uint64_t len);
++
++/**
++ * qemu_plugin_register_guest_write_cb() - observe syscall writes to guest memory
++ * @cb: callback, or NULL to unregister
++ *
++ * User-mode only. @cb is invoked whenever the syscall emulation layer stores
++ * data into guest memory (e.g. the buffer of read(2) or the struct of
++ * fstat(2)). Combined with the syscall entry/return callbacks this gives the
++ * complete memory effect of each syscall. Returns false when unsupported.
++ */
++QEMU_PLUGIN_API
++bool qemu_plugin_register_guest_write_cb(qemu_plugin_guest_write_cb_t cb);
++
+ /**
+  * typedef qemu_plugin_vcpu_syscall_cb_t - vCPU syscall callback function type
+  * @id: plugin id
+diff --git a/linux-user/qemu.h b/linux-user/qemu.h
+index a9dda4bb..03537bb1 100644
+--- a/linux-user/qemu.h
++++ b/linux-user/qemu.h
+@@ -346,11 +346,16 @@ void *lock_user(int type, abi_ulong guest_addr, ssize_t len, bool copy);
+ /* Unlock an area of guest memory.  The first LEN bytes must be
+    flushed back to guest memory. host_ptr = NULL is explicitly
+    allowed and does nothing. */
++/* Set by plugins that want to observe guest memory written by syscalls */
++extern void (*qemu_user_guest_write_hook)(uint64_t guest_addr, uint64_t len);
++
+ #ifndef CONFIG_DEBUG_REMAP
+ static inline void unlock_user(void *host_ptr, abi_ulong guest_addr,
+                                ssize_t len)
+ {
+-    /* no-op */
++    if (unlikely(qemu_user_guest_write_hook) && host_ptr && len > 0) {
++        qemu_user_guest_write_hook(guest_addr, len);
++    }
+ }
+ #else
+ void unlock_user(void *host_ptr, abi_ulong guest_addr, ssize_t len);
+diff --git a/linux-user/riscv/vdso-64.so b/linux-user/riscv/vdso-64.so
+index cc6f7e974be67bd08ed412eccb9af22138385e56..f320c646e56a6b720617da77e07e4bc9c9647890 100755
+GIT binary patch
+delta 518
+zcmeBB*q|^$gYm;e&2YvW6C1@D<0mI_2v1z2!g+&@0Ss<Tym?$?Zwm{zN3ePN!gU)A
+zZ_GXXKJQCy)aEUWTNoKHOwMFBXXM$uka;#E<C@8~tTK!|lcQLb7!5Ypva&NWdQ5I*
+zvsRtVVIWWpG%me?fk7BZPv+Rb0pdHx0g0l_;^Z<0#*oPm+3bYls}d7)^9>6OfQ+1?
+z;$$Fe@<b-N%{J^QjEXTp)eH<g3>Tno19O1{$S9EbjmZZ&)FnHBY(|EU|93Egh2g}+
+z$&8%hlB>adE(QfwxCEH7Z?Yk$c>NV1TM(!hRgQt-K2SgiXu|=h%{)*ApP}Lt(8Sq+
+zc7xP!K@%5+io<-s0X0VxB0l*zr=X%ORLvYTy$s3889_nmmVT3ea@q@^2h?U$t_zHt
+uId~p00mJ+ypE*1N!7)17hF^uzVsawCJtqej#Ll3}EBVbCqb5J(R|f#GA!Y*r
+
+delta 439
+zcmdm>(4jCvgYm>f&2Yvm6C1@DeI{Sz6`#04f%6I*0~lPHc=Nc(7uSsW^R!D#7_;xa
+zc=77d;mE8E#?4z8w=goEnViXN&d9NOA@giT#ubxoS!Eb`Cr7a=G3sotWo2h%beY`B
+zX00g9%D|A`z`!63G;%V>299DN?dT08iZY9n%NQ6PCqHGgn>>+8c5?`O3ZtSYP=<kl
+zhv5v=4PY*iNB}c<7=SJnp8SSGgt2roBd54z9Z;B&;p6`YXv$|yHU!G9hRPmb2J40s
+z2PY>2WzPWlLO`nyK=pD!<sVF*$SLmm1uDA*D$4_vWnzTrf;kYTOAIQ$0!_Wv<d2+E
+zY)K}`iG~rA1-a}uCv%-;+^oy<m<bp_g8b(2(Ds=e$ZyW5Fu9Z8p7R4I#5ViM7lA7D
+Mxgor1zzC8D0E(JfxBvhE
+
+diff --git a/linux-user/riscv/vdso.S b/linux-user/riscv/vdso.S
+index 1d780db7..39337737 100644
+--- a/linux-user/riscv/vdso.S
++++ b/linux-user/riscv/vdso.S
+@@ -85,8 +85,12 @@ vdso_syscall __vdso_clock_getres, __NR_clock_getres_time64
+ vdso_syscall __vdso_getcpu, __NR_getcpu
+ 
+ __vdso_flush_icache:
+-	/* qemu does not need to flush the icache */
+-	li	a0, 0
++	/*
++	 * qemu does not need to flush the icache, but issue the real syscall
++	 * anyway: a process image captured under qemu (usimpoint checkpoints)
++	 * keeps calling this code when it later runs on real hardware.
++	 */
++	raw_syscall __NR_riscv_flush_icache
+ 	ret
+ endf __vdso_flush_icache
+ 
+diff --git a/linux-user/uaccess.c b/linux-user/uaccess.c
+index 27e841e6..00f52afb 100644
+--- a/linux-user/uaccess.c
++++ b/linux-user/uaccess.c
+@@ -38,6 +38,9 @@ void unlock_user(void *host_ptr, abi_ulong guest_addr, ssize_t len)
+     }
+     if (len > 0) {
+         memcpy(host_ptr_conv, host_ptr, len);
++        if (qemu_user_guest_write_hook) {
++            qemu_user_guest_write_hook(guest_addr, len);
++        }
+     }
+     g_free(host_ptr);
+ }
+diff --git a/plugins/api-system.c b/plugins/api-system.c
+index fbf905cd..08b62123 100644
+--- a/plugins/api-system.c
++++ b/plugins/api-system.c
+@@ -129,3 +129,14 @@ void qemu_plugin_update_ns(const void *handle, int64_t new_time)
+                          RUN_ON_CPU_HOST_ULONG(new_time));
+     }
+ }
++
++int qemu_plugin_walk_guest_regions(qemu_plugin_guest_region_cb_t cb,
++                                   void *opaque)
++{
++    return -1;
++}
++
++bool qemu_plugin_register_guest_write_cb(qemu_plugin_guest_write_cb_t cb)
++{
++    return false;
++}
+diff --git a/plugins/api-user.c b/plugins/api-user.c
+index 28704a89..36e0513a 100644
+--- a/plugins/api-user.c
++++ b/plugins/api-user.c
+@@ -13,6 +13,8 @@
+ #include "qemu/osdep.h"
+ #include "qemu/plugin.h"
+ #include "exec/log.h"
++#include "exec/page-protection.h"
++#include "user/page-protection.h"
+ 
+ /*
+  * Virtual Memory queries - these are all NOPs for user-mode which
+@@ -55,3 +57,45 @@ void qemu_plugin_update_ns(const void *handle, int64_t new_time)
+ {
+     qemu_log_mask(LOG_UNIMP, "user-mode can't control time");
+ }
++
++/*
++ * Guest address space walk
++ */
++
++typedef struct {
++    qemu_plugin_guest_region_cb_t cb;
++    void *opaque;
++} WalkGuestRegions;
++
++static int walk_guest_region(void *opaque, vaddr start, vaddr end, int flags)
++{
++    WalkGuestRegions *w = opaque;
++    int prot = 0;
++
++    if (flags & PAGE_READ) {
++        prot |= QEMU_PLUGIN_PROT_READ;
++    }
++    /* PAGE_WRITE may be cleared while TBs exist for the page */
++    if (flags & PAGE_WRITE_ORG) {
++        prot |= QEMU_PLUGIN_PROT_WRITE;
++    }
++    if (flags & PAGE_EXEC) {
++        prot |= QEMU_PLUGIN_PROT_EXEC;
++    }
++    return w->cb(w->opaque, start, end, prot);
++}
++
++int qemu_plugin_walk_guest_regions(qemu_plugin_guest_region_cb_t cb,
++                                   void *opaque)
++{
++    WalkGuestRegions w = { .cb = cb, .opaque = opaque };
++    return walk_memory_regions(&w, walk_guest_region);
++}
++
++void (*qemu_user_guest_write_hook)(uint64_t guest_addr, uint64_t len);
++
++bool qemu_plugin_register_guest_write_cb(qemu_plugin_guest_write_cb_t cb)
++{
++    qemu_user_guest_write_hook = cb;
++    return true;
++}
